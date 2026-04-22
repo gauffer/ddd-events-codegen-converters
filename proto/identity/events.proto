@@ -1,0 +1,17 @@
+syntax = "proto3";
+
+package identity;
+
+option go_package = "github.com/gauffer/ddd-events-codegen-converters/pb/identity;identity";
+
+import "common/kafka.proto";
+import "google/protobuf/timestamp.proto";
+
+message UserCreatedEvent {
+  option (common.topic).value = "identity.user_created_event";
+
+  string event_id = 1;
+  string user_id = 2;
+  string phone = 3;
+  google.protobuf.Timestamp occurred_at = 4;
+}

@@ -1,0 +1,21 @@
+{
+  "name": "identity-outbox-connector",
+  "config": {
+    "connector.class": "io.debezium.connector.mongodb.MongoDbConnector",
+    "mongodb.connection.string": "mongodb://root:password@demo-mongo:27017/?replicaSet=rs0&authSource=admin",
+    "topic.prefix": "dbz",
+    "collection.include.list": "app.identity_outbox",
+    "capture.mode": "change_streams_update_full",
+
+    "transforms": "outbox",
+    "transforms.outbox.type": "io.debezium.connector.mongodb.transforms.outbox.MongoEventRouter",
+    "transforms.outbox.collection.field.event.id": "_id",
+    "transforms.outbox.collection.field.event.key": "key",
+    "transforms.outbox.collection.field.event.payload": "message",
+    "transforms.outbox.route.by.field": "topic",
+    "transforms.outbox.route.topic.replacement": "${routedByValue}",
+
+    "key.converter": "org.apache.kafka.connect.storage.StringConverter",
+    "value.converter": "org.apache.kafka.connect.converters.ByteArrayConverter"
+  }
+}

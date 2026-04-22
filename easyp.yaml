@@ -1,0 +1,26 @@
+lint:
+  use:
+    - DEFAULT
+  enum_zero_value_suffix: _NONE
+  service_suffix: API
+  ignore: []
+  except: []
+  allow_comment_ignores: false
+  ignore_only: {}
+deps:
+  - github.com/googleapis/googleapis
+  - github.com/grpc-ecosystem/grpc-gateway
+generate:
+  inputs:
+    - directory:
+        path: .
+        root: proto
+  plugins:
+    - name: go
+      out: pb
+      opts:
+        paths: source_relative
+breaking:
+  ignore: []
+  against_git_ref: master
+

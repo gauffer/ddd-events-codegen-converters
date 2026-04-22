@@ -1,0 +1,159 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>DDD Events Demo</title>
+    <style>
+        *{box-sizing:border-box;margin:0;padding:0}
+        body{font-family:system-ui,sans-serif;background:#f0f2f5;min-height:100vh;padding:20px}
+        .container{max-width:500px;margin:0 auto}
+        h1{text-align:center;color:#1a1a1a;margin-bottom:8px;font-size:24px}
+        .subtitle{text-align:center;color:#666;margin-bottom:24px;font-size:14px}
+        .flow{background:#1e293b;color:#86efac;padding:12px;border-radius:8px;font-family:monospace;font-size:11px;text-align:center;margin-bottom:20px}
+        .card{background:#fff;border-radius:12px;padding:20px;margin-bottom:16px;box-shadow:0 1px 3px rgba(0,0,0,0.1)}
+        .card h2{font-size:16px;color:#333;margin-bottom:16px;display:flex;align-items:center;gap:10px}
+        .step{width:24px;height:24px;background:#22c55e;color:#fff;border-radius:50%;display:flex;align-items:center;justify-content:center;font-size:12px;font-weight:600}
+        label{display:block;font-size:13px;color:#555;margin-bottom:6px;font-weight:500}
+        input{width:100%;padding:10px 12px;border:1px solid #ddd;border-radius:8px;font-size:14px;margin-bottom:12px}
+        input:focus{outline:none;border-color:#22c55e}
+        button{width:100%;padding:12px;background:#22c55e;color:#fff;border:none;border-radius:8px;font-size:14px;font-weight:500;cursor:pointer}
+        button:hover{background:#16a34a}
+        button:disabled{background:#ccc;cursor:not-allowed}
+        .result{margin-top:12px;padding:12px;border-radius:8px;font-family:monospace;font-size:12px;white-space:pre-wrap;word-break:break-all;display:none}
+        .result.show{display:block}
+        .result.ok{background:#dcfce7;border:1px solid #86efac}
+        .result.err{background:#fee2e2;border:1px solid #fca5a5}
+        .info{background:#eff6ff;border:1px solid #93c5fd;border-radius:8px;padding:12px;margin-bottom:20px;font-size:13px}
+        .info code{background:#dbeafe;padding:2px 6px;border-radius:4px}
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>DDD Events + Codegen</h1>
+        <p class="subtitle">Phone Auth + Outbox CDC + Kafka Event Flow</p>
+        
+        <div class="flow">User -> MongoDB Outbox -> Debezium CDC -> Kafka -> Consumer -> Profile</div>
+        
+        <div class="info">
+            <strong>Test:</strong> Phone <code>+79991112233</code> -> OTP <code>112233</code>
+            <button onclick="resetAll()" style="width:auto;padding:6px 14px;background:#ef4444;margin-top:8px;font-size:12px;border-radius:6px">Reset All Data</button>
+            <div class="result" id="r0"></div>
+        </div>
+
+        <div class="card">
+            <h2><span class="step">1</span>Send OTP</h2>
+            <label>Phone</label>
+            <input type="tel" id="phone" value="+79991112233">
+            <button onclick="step1()">Send OTP</button>
+            <div class="result" id="r1"></div>
+        </div>
+
+        <div class="card">
+            <h2><span class="step">2</span>Verify OTP</h2>
+            <label>Session ID</label>
+            <input type="text" id="sid" placeholder="auto-filled from step 1">
+            <label>OTP Code</label>
+            <input type="text" id="otp" value="112233">
+            <button onclick="step2()">Verify</button>
+            <div class="result" id="r2"></div>
+        </div>
+
+        <div class="card">
+            <h2><span class="step">3</span>Get Tokens</h2>
+            <label>Auth Code</label>
+            <input type="text" id="code" placeholder="auto-filled from step 2">
+            <button onclick="step3()">Exchange</button>
+            <div class="result" id="r3"></div>
+        </div>
+
+        <div class="card">
+            <h2><span class="step">4</span>Verify Event Flow</h2>
+            <button onclick="step4()">Check MongoDB</button>
+            <div class="result" id="r4"></div>
+        </div>
+    </div>
+
+<script>
+function show(id,data,ok){
+    const el=document.getElementById(id);
+    el.textContent=typeof data==='string'?data:JSON.stringify(data,null,2);
+    el.className='result show '+(ok?'ok':'err');
+}
+
+async function api(method,path,body){
+    const opts={method,headers:{}};
+    if(body){
+        if(typeof body==='string'){
+            opts.headers['Content-Type']='application/x-www-form-urlencoded';
+            opts.body=body;
+        }else{
+            opts.headers['Content-Type']='application/json';
+            opts.body=JSON.stringify(body);
+        }
+    }
+    const r=await fetch('/api'+path,opts);
+    return r.json();
+}
+
+async function resetAll(){
+    try{
+        const d=await api('POST','/v1/demo/reset');
+        show('r0',d,!d.error);
+        document.getElementById('sid').value='';
+        document.getElementById('code').value='';
+        ['r1','r2','r3','r4'].forEach(id=>{document.getElementById(id).className='result';});
+    }catch(e){show('r0',e.message,false);}
+}
+
+// PKCE (RFC 7636) защищает OAuth2 для публичных клиентов (SPA, мобильные приложения).
+// Клиент генерирует случайный code_verifier, отправляет его SHA256-хеш как code_challenge.
+// При обмене кода на токен сервер проверяет что code_verifier соответствует code_challenge.
+// Значения ниже из примеров RFC 7636, захардкожены для демо.
+const PKCE_CHALLENGE = 'E9Melhoa2OwvFrEMTJguCHaoeK1t8URWbuGJSstw-cM'; // SHA256(PKCE_VERIFIER)
+const PKCE_VERIFIER  = 'dBjftJeZ4CVP-mB92K27uhbUJU1p1r_wW1gFWFOEjXk';
+
+async function step1(){
+    try{
+        const d=await api('POST','/v1/identity/oauth/phone/initiate',{
+            phone:document.getElementById('phone').value,
+            scopes:['public'],
+            client_id:'1',
+            code_challenge:PKCE_CHALLENGE,
+            code_challenge_method:'S256'
+        });
+        show('r1',d,d.session_id);
+        if(d.session_id)document.getElementById('sid').value=d.session_id;
+    }catch(e){show('r1',e.message,false);}
+}
+
+async function step2(){
+    try{
+        const d=await api('POST','/v1/identity/oauth/phone/verify',{
+            session_id:document.getElementById('sid').value,
+            otp:document.getElementById('otp').value
+        });
+        show('r2',d,d.code);
+        if(d.code)document.getElementById('code').value=d.code;
+    }catch(e){show('r2',e.message,false);}
+}
+
+async function step3(){
+    try{
+        const code=document.getElementById('code').value;
+        const d=await api('POST','/v1/identity/oauth/token',
+            `grant_type=authorization_code&code=${encodeURIComponent(code)}&client_id=1&code_verifier=${PKCE_VERIFIER}`
+        );
+        show('r3',d,d.access_token);
+    }catch(e){show('r3',e.message,false);}
+}
+
+async function step4(){
+    try{
+        const d=await api('GET','/v1/demo/db-check');
+        show('r4',d,!d.error);
+    }catch(e){show('r4',e.message,false);}
+}
+</script>
+</body>
+</html>

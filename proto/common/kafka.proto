@@ -1,0 +1,15 @@
+syntax = "proto3";
+
+package common;
+
+option go_package = "github.com/gauffer/ddd-events-codegen-converters/pb/common;common";
+
+import "google/protobuf/descriptor.proto";
+
+message Topic {
+  string value = 1;
+}
+
+extend google.protobuf.MessageOptions {
+  Topic topic = 51001;
+}

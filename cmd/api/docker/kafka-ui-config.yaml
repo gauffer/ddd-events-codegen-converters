@@ -1,0 +1,15 @@
+kafka:
+  clusters:
+    - name: demo-local
+      bootstrapServers: redpanda:9092
+      properties:
+        security.protocol: SASL_PLAINTEXT
+        sasl.mechanism: SCRAM-SHA-256
+        sasl.jaas.config: org.apache.kafka.common.security.scram.ScramLoginModule required username="admin" password="admin-secret";
+      serde:
+        - name: ProtobufFile
+          properties:
+            protobufFilesDir: /kafka-protos
+            protobufMessageName: identity.UserCreatedEvent
+            protobufMessageNameByTopic:
+              identity.user_created_event: identity.UserCreatedEvent

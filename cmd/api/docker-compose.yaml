@@ -1,0 +1,192 @@
+services:
+  api:
+    build:
+      context: ../..
+      dockerfile: cmd/api/Dockerfile
+    container_name: demo-api
+    ports:
+      - "8080:8080"
+      - "7073:7073"
+    environment:
+      REST_ADDRESS: ":8080"
+      DIAGNOSTICS_ADDRESS: ":7073"
+      LOG_LEVEL: "INFO"
+      SHUTDOWN_TIMEOUT: "10s"
+      MONGO_URI: "mongodb://root:password@demo-mongo:27017/?replicaSet=rs0&authSource=admin"
+      REDIS_URI: "redis://:yourpassword@demo-redis:6379"
+      JWT_PRIVATE_KEY_B64: 'LS0tLS1CRUdJTiBFQyBQUklWQVRFIEtFWS0tLS0tCk1IY0NBUUVFSUFLaXU2bkw4T0JkdzFlS3F2RkU2QlRFZ3RwbERiMXJkWTlFNmQrSVQrNGRvQW9HQ0NxR1NNNDkKQXdFSG9VUURRZ0FFMDNjYmNtcVVaQVUvV1FMM1h1ODhudkExdlYrNGtoOG9HMEJtTlFESEFUcktGQnRSckltUAp0YjU3OXJ6MTA5TmhKM05RSXQrNnlZbVNlUDR5N2VNMldRPT0KLS0tLS1FTkQgRUMgUFJJVkFURSBLRVktLS0tLQo='
+      APP_ENV: "local"
+      KAFKA_BROKERS: "redpanda:9092"
+      KAFKA_SASL_ENABLED: "true"
+      KAFKA_SASL_USER: "app"
+      KAFKA_SASL_PASSWORD: "app-secret"
+    depends_on:
+      demo-mongo:
+        condition: service_healthy
+      demo-redis:
+        condition: service_started
+      redpanda-init:
+        condition: service_completed_successfully
+    networks:
+      - demo-network
+
+  demo-mongo:
+    image: mongo:8.0
+    container_name: demo-mongo
+    restart: always
+    ports:
+      - "27017:27017"
+    environment:
+      MONGO_INITDB_ROOT_USERNAME: root
+      MONGO_INITDB_ROOT_PASSWORD: password
+    volumes:
+      - mongo_data:/data/db
+      - mongo_config:/data/configdb
+    command:
+      - /bin/bash
+      - -c
+      - |
+        if [ ! -f /data/mongo-keyfile ]; then
+          openssl rand -base64 756 > /data/mongo-keyfile
+          chmod 400 /data/mongo-keyfile
+          chown 999:999 /data/mongo-keyfile
+        fi
+        exec docker-entrypoint.sh --replSet rs0 --bind_ip_all --keyFile /data/mongo-keyfile
+    networks:
+      - demo-network
+    healthcheck:
+      test: >
+        mongosh --username root --password password --authenticationDatabase admin --eval "
+        try {
+          rs.status();
+        } catch (err) {
+          rs.initiate({_id: 'rs0', members: [{_id: 0, host: 'demo-mongo:27017'}]});
+        }
+        "
+      interval: 5s
+      timeout: 30s
+      start_period: 0s
+      retries: 30
+
+  demo-redis:
+    image: redis:7.4-alpine
+    container_name: demo-redis
+    restart: always
+    ports:
+      - "6379:6379"
+    command: redis-server --save 20 1 --loglevel warning --requirepass yourpassword
+    volumes:
+      - cache:/data
+    networks:
+      - demo-network
+
+  redpanda:
+    image: redpandadata/redpanda:latest
+    container_name: demo-redpanda
+    restart: always
+    command:
+      - redpanda
+      - start
+      - --kafka-addr internal://0.0.0.0:9092,external://0.0.0.0:19092
+      - --advertise-kafka-addr internal://redpanda:9092,external://localhost:19092
+      - --pandaproxy-addr internal://0.0.0.0:8082,external://0.0.0.0:18082
+      - --advertise-pandaproxy-addr internal://redpanda:8082,external://localhost:18082
+      - --schema-registry-addr internal://0.0.0.0:8081,external://0.0.0.0:18081
+      - --rpc-addr redpanda:33145
+      - --advertise-rpc-addr redpanda:33145
+      - --mode dev-container
+      - --smp 1
+      - --default-log-level=warn
+      - --set redpanda.enable_sasl=true
+      - --set redpanda.superusers=["admin"]
+    ports:
+      - "19092:19092"
+    networks:
+      - demo-network
+    healthcheck:
+      test: ["CMD-SHELL", "rpk cluster health | grep -E 'Healthy:.+true' || exit 1"]
+      interval: 5s
+      timeout: 10s
+      retries: 10
+      start_period: 10s
+
+  redpanda-init:
+    image: redpandadata/redpanda:latest
+    container_name: demo-redpanda-init
+    depends_on:
+      redpanda:
+        condition: service_healthy
+    entrypoint: ["/bin/bash", "-c"]
+    command:
+      - |
+        rpk security user create admin -p admin-secret --mechanism SCRAM-SHA-256 -X brokers=redpanda:9092 -X admin.hosts=redpanda:9644 || true
+        rpk security user create app -p app-secret --mechanism SCRAM-SHA-256 -X brokers=redpanda:9092 -X admin.hosts=redpanda:9644 -X user=admin -X pass=admin-secret -X sasl.mechanism=SCRAM-SHA-256 || true
+        rpk security user create debezium -p debezium-secret --mechanism SCRAM-SHA-256 -X brokers=redpanda:9092 -X admin.hosts=redpanda:9644 -X user=admin -X pass=admin-secret -X sasl.mechanism=SCRAM-SHA-256 || true
+        rpk security acl create --allow-principal User:app --operation all --topic '*' --group '*' -X brokers=redpanda:9092 -X user=admin -X pass=admin-secret -X sasl.mechanism=SCRAM-SHA-256 || true
+        rpk security acl create --allow-principal User:debezium --operation all --topic '*' --group '*' -X brokers=redpanda:9092 -X user=admin -X pass=admin-secret -X sasl.mechanism=SCRAM-SHA-256 || true
+        echo "Redpanda users and ACLs created"
+    networks:
+      - demo-network
+
+  kafka-ui:
+    image: provectuslabs/kafka-ui:latest
+    container_name: demo-kafka-ui
+    restart: always
+    ports:
+      - "8081:8080"
+    volumes:
+      - ./docker/kafka-ui-config.yaml:/etc/kafkaui/dynamic_config.yaml:ro
+      - ../../proto:/kafka-protos:ro
+    environment:
+      DYNAMIC_CONFIG_ENABLED: "true"
+    depends_on:
+      - redpanda
+    networks:
+      - demo-network
+
+  debezium:
+    image: debezium/connect:2.7.3.Final
+    container_name: demo-debezium
+    restart: always
+    ports:
+      - "8083:8083"
+    environment:
+      BOOTSTRAP_SERVERS: redpanda:9092
+      GROUP_ID: demo-connect
+      CONFIG_STORAGE_TOPIC: _connect_configs
+      OFFSET_STORAGE_TOPIC: _connect_offsets
+      STATUS_STORAGE_TOPIC: _connect_status
+      CONFIG_STORAGE_REPLICATION_FACTOR: 1
+      OFFSET_STORAGE_REPLICATION_FACTOR: 1
+      STATUS_STORAGE_REPLICATION_FACTOR: 1
+      CONNECT_SASL_MECHANISM: SCRAM-SHA-256
+      CONNECT_SECURITY_PROTOCOL: SASL_PLAINTEXT
+      CONNECT_SASL_JAAS_CONFIG: "org.apache.kafka.common.security.scram.ScramLoginModule required username=\"debezium\" password=\"debezium-secret\";"
+      CONNECT_PRODUCER_SASL_MECHANISM: SCRAM-SHA-256
+      CONNECT_PRODUCER_SECURITY_PROTOCOL: SASL_PLAINTEXT
+      CONNECT_PRODUCER_SASL_JAAS_CONFIG: "org.apache.kafka.common.security.scram.ScramLoginModule required username=\"debezium\" password=\"debezium-secret\";"
+      CONNECT_CONSUMER_SASL_MECHANISM: SCRAM-SHA-256
+      CONNECT_CONSUMER_SECURITY_PROTOCOL: SASL_PLAINTEXT
+      CONNECT_CONSUMER_SASL_JAAS_CONFIG: "org.apache.kafka.common.security.scram.ScramLoginModule required username=\"debezium\" password=\"debezium-secret\";"
+    depends_on:
+      demo-mongo:
+        condition: service_healthy
+      redpanda-init:
+        condition: service_completed_successfully
+    networks:
+      - demo-network
+    healthcheck:
+      test: ["CMD-SHELL", "curl -f http://localhost:8083/connectors || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 30s
+
+networks:
+  demo-network:
+    driver: bridge
+
+volumes:
+  mongo_data:
+  mongo_config:
+  cache:
